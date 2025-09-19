@@ -5,6 +5,7 @@ declare global {
   interface Window {
     gapi: any;
     google: any;
+    googleSignInCallback?: (response: any) => void;
   }
 }
 
@@ -19,13 +20,13 @@ export const useGoogleAuth = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [user, setUser] = useState<GoogleUser | null>(null);
-  const [authInstance, setAuthInstance] = useState<any>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    initializeGapi();
+    initializeGoogleIdentity();
   }, []);
 
-  const initializeGapi = async () => {
+  const initializeGoogleIdentity = async () => {
     try {
       // Check if Client ID is configured
       if (!GOOGLE_CONFIG.CLIENT_ID) {
@@ -34,22 +35,47 @@ export const useGoogleAuth = () => {
         return;
       }
 
-      // Load Google API
-      await loadGoogleAPI();
+      // Load Google Identity Services
+      await loadGoogleIdentityServices();
 
-      // Load required gapi modules
-      await new Promise<void>((resolve) => {
-        window.gapi.load('client:auth2', () => {
-          resolve();
-        });
+      // Initialize Google Identity Services
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CONFIG.CLIENT_ID,
+        callback: handleSignInResponse,
+        auto_select: false,
+        cancel_on_tap_outside: true,
       });
 
-      // Initialize auth
-      await initAuth();
+      // Load GAPI for Sheets API
+      await loadGoogleAPI();
+      await new Promise<void>((resolve) => {
+        window.gapi.load('client', resolve);
+      });
+
+      await window.gapi.client.init({
+        discoveryDocs: GOOGLE_CONFIG.DISCOVERY_DOCS
+      });
+
+      setIsLoading(false);
     } catch (error) {
-      console.error('Error initializing Google API:', error);
+      console.error('Error initializing Google Identity:', error);
       setIsLoading(false);
     }
+  };
+
+  const loadGoogleIdentityServices = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (window.google?.accounts) {
+        resolve();
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+      document.head.appendChild(script);
+    });
   };
 
   const loadGoogleAPI = (): Promise<void> => {
@@ -67,78 +93,88 @@ export const useGoogleAuth = () => {
     });
   };
 
-  const initAuth = async () => {
+  const handleSignInResponse = async (response: any) => {
     try {
-      // Initialize gapi client first
-      await window.gapi.client.init({
-        clientId: GOOGLE_CONFIG.CLIENT_ID,
-        scope: GOOGLE_CONFIG.SCOPES.join(' '),
-        discoveryDocs: GOOGLE_CONFIG.DISCOVERY_DOCS
-      });
+      // Decode the JWT token to get user info
+      const payload = JSON.parse(atob(response.credential.split('.')[1]));
 
-      // Initialize auth2
-      await window.gapi.auth2.init({
-        client_id: GOOGLE_CONFIG.CLIENT_ID,
-      });
-
-      const authInstanceRef = window.gapi.auth2.getAuthInstance();
-      setAuthInstance(authInstanceRef);
-
-      // Check if user is already signed in
-      const isSignedInStatus = authInstanceRef.isSignedIn.get();
-      setIsSignedIn(isSignedInStatus);
-
-      if (isSignedInStatus) {
-        updateUserInfo(authInstanceRef.currentUser.get());
-      }
-
-      // Listen for sign-in state changes
-      authInstanceRef.isSignedIn.listen(setIsSignedIn);
-      authInstanceRef.currentUser.listen(updateUserInfo);
-
-      setIsLoading(false);
-    } catch (error) {
-      console.error('Error initializing auth:', error);
-      setIsLoading(false);
-    }
-  };
-
-  const updateUserInfo = (googleUser: any) => {
-    if (googleUser.isSignedIn()) {
-      const profile = googleUser.getBasicProfile();
       setUser({
-        id: profile.getId(),
-        name: profile.getName(),
-        email: profile.getEmail(),
-        picture: profile.getImageUrl()
+        id: payload.sub,
+        name: payload.name,
+        email: payload.email,
+        picture: payload.picture
       });
-    } else {
-      setUser(null);
+
+      setIsSignedIn(true);
+
+      // Get access token for API calls
+      const tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CONFIG.CLIENT_ID,
+        scope: GOOGLE_CONFIG.SCOPES.join(' '),
+        callback: (tokenResponse: any) => {
+          setAccessToken(tokenResponse.access_token);
+          window.gapi.client.setToken({ access_token: tokenResponse.access_token });
+        },
+      });
+
+      tokenClient.requestAccessToken({ prompt: '' });
+    } catch (error) {
+      console.error('Error handling sign in response:', error);
     }
   };
 
   const signIn = async () => {
-    console.log('signIn called, authInstance:', authInstance);
-    if (!authInstance) {
-      console.error('Auth instance not available');
-      return;
-    }
-
+    console.log('Attempting to sign in with Google Identity Services...');
     try {
-      console.log('Calling authInstance.signIn()...');
-      await authInstance.signIn();
-      console.log('Sign in successful');
+      // Show the sign-in prompt
+      window.google.accounts.id.prompt((notification: any) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+          // Fallback to popup
+          const tokenClient = window.google.accounts.oauth2.initTokenClient({
+            client_id: GOOGLE_CONFIG.CLIENT_ID,
+            scope: GOOGLE_CONFIG.SCOPES.join(' '),
+            callback: async (tokenResponse: any) => {
+              setAccessToken(tokenResponse.access_token);
+              window.gapi.client.setToken({ access_token: tokenResponse.access_token });
+
+              // Get user info
+              try {
+                const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                  headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+                });
+                const userInfo = await response.json();
+
+                setUser({
+                  id: userInfo.id,
+                  name: userInfo.name,
+                  email: userInfo.email,
+                  picture: userInfo.picture
+                });
+                setIsSignedIn(true);
+              } catch (error) {
+                console.error('Error getting user info:', error);
+              }
+            },
+          });
+
+          tokenClient.requestAccessToken({ prompt: 'consent' });
+        }
+      });
     } catch (error) {
       console.error('Error signing in:', error);
     }
   };
 
   const signOut = async () => {
-    if (!authInstance) return;
-
     try {
-      await authInstance.signOut();
+      if (accessToken) {
+        window.google.accounts.oauth2.revoke(accessToken);
+      }
+      window.google.accounts.id.disableAutoSelect();
       setUser(null);
+      setIsSignedIn(false);
+      setAccessToken(null);
+      window.gapi.client.setToken(null);
     } catch (error) {
       console.error('Error signing out:', error);
     }

@@ -37,9 +37,24 @@ export class GoogleSheetsService {
     throw new Error('No spreadsheet ID found. Please initialize first.');
   }
 
+  async ensureSpreadsheetExists(): Promise<string> {
+    try {
+      return this.getSpreadsheetId();
+    } catch (error) {
+      console.log('No existing spreadsheet found, creating new one...');
+      return await this.initializeSpreadsheet();
+    }
+  }
+
   private setSpreadsheetId(id: string): void {
     this.spreadsheetId = id;
     localStorage.setItem('finance_tracker_spreadsheet_id', id);
+  }
+
+  clearSpreadsheetData(): void {
+    this.spreadsheetId = null;
+    localStorage.removeItem('finance_tracker_spreadsheet_id');
+    console.log('Cleared spreadsheet data');
   }
 
   async initializeSpreadsheet(): Promise<string> {
@@ -141,8 +156,9 @@ export class GoogleSheetsService {
   // Transaction CRUD operations
   async getTransactions(): Promise<Transaction[]> {
     try {
+      const spreadsheetId = await this.ensureSpreadsheetExists();
       const response = await this.sheets.spreadsheets.values.get({
-        spreadsheetId: this.getSpreadsheetId(),
+        spreadsheetId,
         range: `${GOOGLE_CONFIG.SHEETS.TRANSACTIONS}!A2:H`,
       });
 
@@ -168,8 +184,9 @@ export class GoogleSheetsService {
       const id = `txn_${Date.now()}`;
       const createdAt = new Date().toISOString();
 
+      const spreadsheetId = await this.ensureSpreadsheetExists();
       await this.sheets.spreadsheets.values.append({
-        spreadsheetId: this.getSpreadsheetId(),
+        spreadsheetId,
         range: `${GOOGLE_CONFIG.SHEETS.TRANSACTIONS}!A:H`,
         valueInputOption: 'USER_ENTERED',
         resource: {
@@ -193,8 +210,9 @@ export class GoogleSheetsService {
 
   async getCategories(): Promise<Category[]> {
     try {
+      const spreadsheetId = await this.ensureSpreadsheetExists();
       const response = await this.sheets.spreadsheets.values.get({
-        spreadsheetId: this.getSpreadsheetId(),
+        spreadsheetId,
         range: `${GOOGLE_CONFIG.SHEETS.CATEGORIES}!A2:E`,
       });
 
@@ -214,8 +232,9 @@ export class GoogleSheetsService {
 
   async getAccounts(): Promise<Account[]> {
     try {
+      const spreadsheetId = await this.ensureSpreadsheetExists();
       const response = await this.sheets.spreadsheets.values.get({
-        spreadsheetId: this.getSpreadsheetId(),
+        spreadsheetId,
         range: `${GOOGLE_CONFIG.SHEETS.ACCOUNTS}!A2:E`,
       });
 

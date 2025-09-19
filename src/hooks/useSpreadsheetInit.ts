@@ -20,11 +20,21 @@ export const useSpreadsheetInit = (isSignedIn: boolean) => {
 
         const sheetsService = GoogleSheetsService.getInstance();
 
-        console.log('Checking for existing spreadsheet...');
+        // Check if we already have a spreadsheet ID
+        const existingId = localStorage.getItem('finance_tracker_spreadsheet_id');
 
-        // Try to use existing spreadsheet, create only if needed
+        if (existingId) {
+          console.log('Using existing spreadsheet:', existingId);
+          setIsInitialized(true);
+          setIsInitializing(false);
+          return;
+        }
+
+        console.log('No existing spreadsheet found, creating new one...');
+
+        // Only create new spreadsheet if none exists
         const spreadsheetId = await sheetsService.ensureSpreadsheetExists();
-        console.log('Spreadsheet ready:', spreadsheetId);
+        console.log('New spreadsheet created:', spreadsheetId);
 
         setIsInitialized(true);
       } catch (error) {
@@ -38,7 +48,8 @@ export const useSpreadsheetInit = (isSignedIn: boolean) => {
       }
     };
 
-    initializeSpreadsheet();
+    // Add small delay to ensure session restoration completes first
+    setTimeout(initializeSpreadsheet, 500);
   }, [isSignedIn]);
 
   return {

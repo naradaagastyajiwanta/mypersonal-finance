@@ -23,23 +23,70 @@ export const useGoogleAuth = () => {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check for existing session first
-    const savedUser = localStorage.getItem('finance_tracker_user');
-    const savedToken = localStorage.getItem('finance_tracker_token');
+    const restoreSession = async () => {
+      // Check for existing session first
+      const savedUser = localStorage.getItem('finance_tracker_user');
+      const savedToken = localStorage.getItem('finance_tracker_token');
 
-    if (savedUser && savedToken) {
-      console.log('Restoring saved session...');
-      setUser(JSON.parse(savedUser));
-      setAccessToken(savedToken);
-      setIsSignedIn(true);
+      console.log('Checking saved session...', {
+        hasUser: !!savedUser,
+        hasToken: !!savedToken,
+        tokenLength: savedToken?.length
+      });
 
-      // Set token for API calls
-      if (window.gapi?.client) {
-        window.gapi.client.setToken({ access_token: savedToken });
+      if (savedUser && savedToken) {
+        try {
+          // Parse token data
+          let tokenData;
+          try {
+            tokenData = JSON.parse(savedToken);
+          } catch {
+            // Old format, treat as plain token
+            tokenData = { access_token: savedToken, expires_at: Date.now() + 3600000 };
+          }
+
+          // Check if token is expired
+          if (tokenData.expires_at && Date.now() > tokenData.expires_at) {
+            console.log('Saved token is expired, clearing session');
+            localStorage.removeItem('finance_tracker_user');
+            localStorage.removeItem('finance_tracker_token');
+          } else {
+            // Validate token by making a test API call
+            const testResponse = await fetch('https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=' + tokenData.access_token);
+
+            if (testResponse.ok) {
+              console.log('Restoring valid saved session...');
+              setUser(JSON.parse(savedUser));
+              setAccessToken(tokenData.access_token);
+              setIsSignedIn(true);
+
+              // Initialize Google API first, then set token
+              await initializeGoogleIdentity();
+
+              // Set token after gapi is ready
+              if (window.gapi?.client) {
+                window.gapi.client.setToken({ access_token: tokenData.access_token });
+                console.log('Token restored to gapi client');
+              }
+              return;
+            } else {
+              console.log('Saved token is invalid, clearing session');
+              localStorage.removeItem('finance_tracker_user');
+              localStorage.removeItem('finance_tracker_token');
+            }
+          }
+        } catch (error) {
+          console.log('Error validating token, clearing session:', error);
+          localStorage.removeItem('finance_tracker_user');
+          localStorage.removeItem('finance_tracker_token');
+        }
       }
-    }
 
-    initializeGoogleIdentity();
+      // If no valid session, initialize normally
+      await initializeGoogleIdentity();
+    };
+
+    restoreSession();
   }, []);
 
   const initializeGoogleIdentity = async () => {
@@ -71,13 +118,6 @@ export const useGoogleAuth = () => {
       await window.gapi.client.init({
         discoveryDocs: GOOGLE_CONFIG.DISCOVERY_DOCS
       });
-
-      // If we have a saved token, set it for API calls
-      const savedToken = localStorage.getItem('finance_tracker_token');
-      if (savedToken && window.gapi?.client) {
-        window.gapi.client.setToken({ access_token: savedToken });
-        console.log('Restored API token from localStorage');
-      }
 
       setIsLoading(false);
     } catch (error) {
@@ -142,8 +182,12 @@ export const useGoogleAuth = () => {
           setAccessToken(tokenResponse.access_token);
           window.gapi.client.setToken({ access_token: tokenResponse.access_token });
 
-          // Save token to localStorage
-          localStorage.setItem('finance_tracker_token', tokenResponse.access_token);
+          // Save token with expiration to localStorage
+          const tokenData = {
+            access_token: tokenResponse.access_token,
+            expires_at: Date.now() + (tokenResponse.expires_in || 3600) * 1000 // Default 1 hour
+          };
+          localStorage.setItem('finance_tracker_token', JSON.stringify(tokenData));
         },
       });
 
@@ -184,9 +228,13 @@ export const useGoogleAuth = () => {
                 setUser(userData);
                 setIsSignedIn(true);
 
-                // Save session data
+                // Save session data with expiration
                 localStorage.setItem('finance_tracker_user', JSON.stringify(userData));
-                localStorage.setItem('finance_tracker_token', tokenResponse.access_token);
+                const tokenData = {
+                  access_token: tokenResponse.access_token,
+                  expires_at: Date.now() + (tokenResponse.expires_in || 3600) * 1000
+                };
+                localStorage.setItem('finance_tracker_token', JSON.stringify(tokenData));
               } catch (error) {
                 console.error('Error getting user info:', error);
               }

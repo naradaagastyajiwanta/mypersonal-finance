@@ -20,13 +20,11 @@ export const useSpreadsheetInit = (isSignedIn: boolean) => {
 
         const sheetsService = GoogleSheetsService.getInstance();
 
-        // Clear any old cached data first for fresh start
-        sheetsService.clearSpreadsheetData();
-        console.log('Starting fresh spreadsheet initialization...');
+        console.log('Checking for existing spreadsheet...');
 
-        // Always create a new spreadsheet for this session
-        const spreadsheetId = await sheetsService.initializeSpreadsheet();
-        console.log('New spreadsheet created:', spreadsheetId);
+        // Try to use existing spreadsheet, create only if needed
+        const spreadsheetId = await sheetsService.ensureSpreadsheetExists();
+        console.log('Spreadsheet ready:', spreadsheetId);
 
         setIsInitialized(true);
       } catch (error) {

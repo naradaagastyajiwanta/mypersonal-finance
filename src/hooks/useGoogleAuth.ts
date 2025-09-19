@@ -23,6 +23,22 @@ export const useGoogleAuth = () => {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
+    // Check for existing session first
+    const savedUser = localStorage.getItem('finance_tracker_user');
+    const savedToken = localStorage.getItem('finance_tracker_token');
+
+    if (savedUser && savedToken) {
+      console.log('Restoring saved session...');
+      setUser(JSON.parse(savedUser));
+      setAccessToken(savedToken);
+      setIsSignedIn(true);
+
+      // Set token for API calls
+      if (window.gapi?.client) {
+        window.gapi.client.setToken({ access_token: savedToken });
+      }
+    }
+
     initializeGoogleIdentity();
   }, []);
 
@@ -55,6 +71,13 @@ export const useGoogleAuth = () => {
       await window.gapi.client.init({
         discoveryDocs: GOOGLE_CONFIG.DISCOVERY_DOCS
       });
+
+      // If we have a saved token, set it for API calls
+      const savedToken = localStorage.getItem('finance_tracker_token');
+      if (savedToken && window.gapi?.client) {
+        window.gapi.client.setToken({ access_token: savedToken });
+        console.log('Restored API token from localStorage');
+      }
 
       setIsLoading(false);
     } catch (error) {
@@ -98,14 +121,18 @@ export const useGoogleAuth = () => {
       // Decode the JWT token to get user info
       const payload = JSON.parse(atob(response.credential.split('.')[1]));
 
-      setUser({
+      const userData = {
         id: payload.sub,
         name: payload.name,
         email: payload.email,
         picture: payload.picture
-      });
+      };
 
+      setUser(userData);
       setIsSignedIn(true);
+
+      // Save user data to localStorage
+      localStorage.setItem('finance_tracker_user', JSON.stringify(userData));
 
       // Get access token for API calls
       const tokenClient = window.google.accounts.oauth2.initTokenClient({
@@ -114,6 +141,9 @@ export const useGoogleAuth = () => {
         callback: (tokenResponse: any) => {
           setAccessToken(tokenResponse.access_token);
           window.gapi.client.setToken({ access_token: tokenResponse.access_token });
+
+          // Save token to localStorage
+          localStorage.setItem('finance_tracker_token', tokenResponse.access_token);
         },
       });
 
@@ -144,13 +174,19 @@ export const useGoogleAuth = () => {
                 });
                 const userInfo = await response.json();
 
-                setUser({
+                const userData = {
                   id: userInfo.id,
                   name: userInfo.name,
                   email: userInfo.email,
                   picture: userInfo.picture
-                });
+                };
+
+                setUser(userData);
                 setIsSignedIn(true);
+
+                // Save session data
+                localStorage.setItem('finance_tracker_user', JSON.stringify(userData));
+                localStorage.setItem('finance_tracker_token', tokenResponse.access_token);
               } catch (error) {
                 console.error('Error getting user info:', error);
               }
@@ -171,10 +207,19 @@ export const useGoogleAuth = () => {
         window.google.accounts.oauth2.revoke(accessToken);
       }
       window.google.accounts.id.disableAutoSelect();
+
+      // Clear local state
       setUser(null);
       setIsSignedIn(false);
       setAccessToken(null);
       window.gapi.client.setToken(null);
+
+      // Clear localStorage
+      localStorage.removeItem('finance_tracker_user');
+      localStorage.removeItem('finance_tracker_token');
+      localStorage.removeItem('finance_tracker_spreadsheet_id');
+
+      console.log('Session cleared successfully');
     } catch (error) {
       console.error('Error signing out:', error);
     }
